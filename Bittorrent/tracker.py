@@ -1,62 +1,94 @@
-# -*- coding: utf-8 -*-
-
-#a really simple tracker
 from http.server import BaseHTTPRequestHandler
 from http.server import HTTPServer
-#useful utilities for parsing request headers
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qsl
+from collections import defaultdict
+from uuid import uuid4
+from random import sample
 
-info_hash_to_peers = {}
+from bencode import bencode
 
-class peer:
+info_hash_to_peers = defaultdict(dict)
+
+class Peer(object):
     peer_id = ""
     ip_address = ""
     port = 0
-    info_hashes = {}
+    tracker_id = ""
+    complete = 0
 
-class tracker(BaseHTTPRequestHandler):
+def handle_GET(handler):
+    params = dict(parse_qsl(urlparse(handler.path).query, keep_blank_values=1))
 
-    #dependancy injection for testing, NB could put this in the test code?
-    def __init__(s, wfile, path, client_address, requestline, request_version):
-        s.wfile = wfile
-        s.path = path
-        s.client_address = client_address
-        s.requestline = requestline
-        s.request_version = request_version
-        
-    def do_GET(s):
-        #parse out the parameters of the request
-        params = parse_qs(urlparse(s.path).query, keep_blank_values=1)
+    #mandatory fields
+    info_hash = params["info_hash"]
+    peer_id = params["peer_id"]        
+    port = int(params["port"])
 
-        #mandatory fields, should not return a result if these aren't provided.
-        peer_id = params["peer_id"]
-        info_hash = params["info_hash"]
+    #non-mandatory fields
+    event = params.get("event", "")
+    numwant = int(params.get("numwant", 50))
 
-        #use the address from the request, else check for ip_address in the parameters.
-        ip_address, not_int = s.client_address
-        if params.get("ip_address"):
-            ip_address = params["ip_address"]
+    #use the address from the request, else check for ip_address in the parameters.
+    ip_address, x = handler.client_address
+    if params.get("ip_address"):
+        ip_address = params["ip_address"]
 
-        #port is mandatory
-        port = params["port"]
+    peers_by_id = info_hash_to_peers[info_hash]
 
-        #add this client as someone who has the file.
-        #info_hash_to_peers[
+    #get a sample of peers to return to the client
+    num_peers = min(numwant, len(peers_by_id))
+    peers_sample = sample(list(peers_by_id.values()), num_peers)
+    #turn them into the appropriate dictionary response
+    peers_sample_list = [{"peer id":p.peer_id, "ip": p.ip_address, "port": p.port} for p in peers_sample]
 
-        #get other peers for this info_hash and return them to the client.
-        #other_peers = info_hash_to_peers.get("
+    #add the client to peers list if they just started
+    if event == "started":
+        p = Peer()
+        p.peer_id = peer_id
+        p.ip_address = ip_address
+        p.port = port
+        p.tracker_id = str(uuid4())
+        peers_by_id[peer_id] = p
+    elif event == "complete":
+        p = peers_by_id[peer_id]
+        p.complete = 1
 
-        s.send_response(200)
-        s.send_header("Content-type", "text/plain")
-        s.end_headers()
-        s.write("path=%s" % s.path)
-        s.write("\nparams=%s" % params)
-    def write(s, to_write):
-        s.wfile.write(bytes(to_write, "UTF-8"))
+    #get the count of seeders/leechers (including ourselves?)
+    total = 0
+    complete = 0
+    for peer_id, peer in peers_by_id.items():
+        total += 1
+        if peer.complete:
+            complete += 1
+    incomplete = total - complete
 
-#run the server if this was the main thing.
+    #get the tracker ID we have generated for the client, if we have one
+    tracker_id = peers_by_id.get(peer_id).tracker_id if peers_by_id.get(peer_id) else ""
+
+    #generate the final response
+    response = {"interval": 30,
+    "complete": complete,
+    "incomplete": incomplete,
+    "tracker id": tracker_id,
+    "peers": peers_sample_list}
+    response_str = bencode(response)
+
+    #and send!
+    handler.send_response(200)
+    handler.send_header("Content-type", "text/plain")
+    handler.end_headers()
+    handler.write_str(response_str)
+
+class Tracker(BaseHTTPRequestHandler):
+    def do_GET(self):
+        handle_GET(self)
+
+    def write_str(self, to_write):
+        self.wfile.write(bytes(to_write, "UTF-8"))
+ 
 if __name__ == "__main__":
-    httpd = HTTPServer((b"localhost", 8000), tracker)
+    #todo take arguments for where to bind to.
+    httpd = HTTPServer((b"localhost", 8000), Tracker)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
