@@ -1,0 +1,10 @@
+#function library for bittorrent
+
+def bencode(content):
+    pass
+
+def bdecode(text):
+    for c in text:
+        
+        pass
+    pass
