@@ -1,15 +1,7 @@
-# -*- coding: utf-8 -*-
-
 #encoding and decoding in bittorrent encode (bencode)
-#totally ripped straight from
-#https://wiki.theory.org/Decoding_bencoded_data_with_python
 
-import re
-try:
-    import psyco  # Optional, 2.5x improvement in speed
-    psyco.full()
-except ImportError:
-    pass
+import string
+import io
 
 class BencodeError(BaseException):
     def __init__(self, error):
@@ -17,75 +9,103 @@ class BencodeError(BaseException):
     def __repr__(self):
         return self.error
 
-#bencoding specification states that dictionaries must be encoded with string keys in sorted order, 
-#using byte representation of the string to sort. This function is used to get the sorting key.
+def bdecode_file(input_file):
+    #read first byte, turn it in to a character.
+    b = read_one_chr(input_file)
+    if b == 'd':
+        return read_dict(input_file)
+    elif b == 'l':
+        return read_list(input_file)
+    elif b == 'i':
+        return read_int(input_file)
+    else:
+        #seek back one, we need that first char as part of the string length.
+        input_file.seek(-1, io.SEEK_CUR)
+        return read_bytes_str(input_file)
+
+def read_dict(input_file):
+    d = {}
+    while True:
+        if read_one_chr(input_file) == 'e': #test if we got to the end of the dict yet.
+            return d
+        input_file.seek(-1, io.SEEK_CUR)  #go back one, as we read one in...
+        key = read_bytes_str(input_file)  #decode a key object, always a string
+        value = bdecode_file(input_file)  #decode a value object
+        d[key] = value                    #add to the dictionary
+
+def read_list(input_file):
+    l = []
+    while True:
+        if read_one_chr(input_file) == 'e': #test if we got to the end of the list yet.
+            return l
+        input_file.seek(-1, io.SEEK_CUR) #go back one, as we read one in...
+        item = bdecode_file(input_file)  #decode a list item
+        l.append(item)                   #add to the lit    
+
+def read_int(input_file, end_chr='e'):   #specify end char, used in read string too
+    num_chrs = ""
+    input_chr = read_one_chr(input_file)
+    while input_chr != end_chr:
+        num_chrs += input_chr
+        input_chr = read_one_chr(input_file)
+    return int(num_chrs, base=10)
+
+def read_bytes_str(input_file):
+    length = read_int(input_file, end_chr=":") #int length, separated by : from string chars
+    return input_file.read(length)
+
+def read_one_chr(input_file):
+    input_bytes = input_file.read(1)
+    if not input_bytes:
+        raise BencodeError("Unexpected end of file!")
+    return chr(input_bytes[0])
+
+def bdecode(input_str, encoding="UTF-8"):
+    from io import BytesIO
+    input_bytes = input_str.encode(encoding)
+    input_file = BytesIO(input_bytes)
+    return bdecode_file(input_file)
+
+def bencode_file(output_file, root):
+    if type(root) is str:
+        write_str(output_file, str(len(root)))
+        write_str(output_file, ":")
+        write_str(output_file, root)
+    elif type(root) is bytes:
+        write_str(output_file, str(len(root)))
+        write_str(output_file, ":")
+        output_file.write(root)
+    elif type(root) is int:
+        write_str(output_file, "i")
+        write_str(output_file, str(root))
+        write_str(output_file, "e")
+    elif type(root) is list:
+        write_str(output_file, "l")
+        for item in root:
+            bencode_file(output_file, item)
+        write_str(output_file, "e")
+    elif type(root) is dict:
+        write_str(output_file, "d")
+        #keys must be sorted, using utf-8 bytes
+        for the_key in sorted(root.keys(), key=utf8bytes):
+            bencode_file(output_file, the_key)
+            bencode_file(output_file, root[the_key])
+        write_str(output_file, "e")
+    else:
+        raise BencodeError("Invalid input:" + str(root))
+
 def utf8bytes(to_encode):
     return bytes(to_encode, "UTF-8")
 
-decimal_match = re.compile('\d')
+def write_str(output_file, string):
+    output_file.write(string.encode("UTF-8"))
 
-def bdecode(data):
-    chunks = list(data)
-    chunks.reverse()
-    root = _dechunk(chunks)
-    return root
-
-def _dechunk(chunks):
-    item = chunks.pop()
-    if item == 'd':
-        item = chunks.pop()
-        dct = {}
-        while item != 'e':
-            chunks.append(item)
-            key = _dechunk(chunks)
-            dct[key] = _dechunk(chunks)
-            item = chunks.pop()
-        return dct
-    elif item == 'l':
-        item = chunks.pop()
-        lst = []
-        while item != 'e':
-            chunks.append(item)
-            lst.append(_dechunk(chunks))
-            item = chunks.pop()
-        return lst
-    elif item == 'i':
-        item = chunks.pop()
-        num = ''
-        while item != 'e':
-            num += item
-            item = chunks.pop()
-        return int(num)
-    elif decimal_match.search(item):
-        #todo strings may not always be UTF-8 encoded! Return as bytes...
-        num = ''
-        while decimal_match.search(item):
-            num += item
-            item = chunks.pop()
-        line = ""
-        for i in range(int(num)):
-            line += chunks.pop()
-        return line
-    raise BencodeError("Invalid input:" + str(item))
-
-def bencode(root):
-    if type(root) is str:
-        return str(len(root)) + ":" + root
-    elif type(root) is int:
-        return "i" + str(root) + "e"
-    elif type(root) is list:
-        ret = "l"
-        for item in root:
-            ret = ret + bencode(item)
-        return ret + "e"
-    elif type(root) is dict:
-        ret = "d"
-        #keys must be sorted, using utf-8 bytes
-        for the_key in sorted(root.keys(), key=utf8bytes):
-            ret = ret + bencode(the_key) + bencode(root[the_key])
-        return ret + "e"
-    else:
-        raise BencodeError("Invalid input:" + str(root))
+def bencode(obj, encoding="UTF-8"):
+    from io import BytesIO
+    output_file = BytesIO()
+    bencode_file(output_file, obj)
+    output_file.seek(0)
+    return str(output_file.read(), encoding)
 
 #if running this as main, take an input and print the output python object
 if __name__ == "__main__":
@@ -93,17 +113,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Decode using bittorrent encoding.')
     parser.add_argument('input', type=str, help='input string to be decoded, or the file to read input from (with -f option)')
     parser.add_argument('-f', dest="read_file", action='store_const', default=0, const=1, help='read input from a file')
-    parser.add_argument('-e', dest="encoding", type=str, default="UTF-8", help='encoding for the input file (Defaults to UTF-8)')
 
     args = parser.parse_args()
     if args.read_file:
-        with open(args.input, 'r', encoding=args.encoding) as the_file:
-            the_input = the_file.read()
+        with open(args.input, 'rb') as the_file:
+            print(bdecode_file(the_file))
     else:
-        the_input = args.input
-
-    print(bdecode(the_input))
-
+        print(bdecode(args.input))
 
 
 

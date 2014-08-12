@@ -5,7 +5,7 @@ from collections import defaultdict
 from uuid import uuid4
 from random import sample
 
-from bencode import bencode
+from bencode import bencode_file
 
 info_hash_to_peers = defaultdict(dict)
 
@@ -16,7 +16,7 @@ class Peer(object):
     tracker_id = ""
     complete = 0
 
-def handle_GET(handler):
+def handle_GET(handler, output_file):
     params = dict(parse_qsl(urlparse(handler.path).query, keep_blank_values=1))
 
     #mandatory fields
@@ -65,27 +65,23 @@ def handle_GET(handler):
     #get the tracker ID we have generated for the client, if we have one
     tracker_id = peers_by_id.get(peer_id).tracker_id if peers_by_id.get(peer_id) else ""
 
+    #send headers
+    handler.send_response(200)
+    handler.send_header("Content-type", "text/plain")
+    handler.end_headers()
+
     #generate the final response
     response = {"interval": 30,
     "complete": complete,
     "incomplete": incomplete,
     "tracker id": tracker_id,
     "peers": peers_sample_list}
-    response_str = bencode(response)
-
-    #and send!
-    handler.send_response(200)
-    handler.send_header("Content-type", "text/plain")
-    handler.end_headers()
-    handler.write_str(response_str)
+    bencode_file(output_file, response)
 
 class Tracker(BaseHTTPRequestHandler):
     def do_GET(self):
-        handle_GET(self)
+        handle_GET(self, self.wfile)
 
-    def write_str(self, to_write):
-        self.wfile.write(bytes(to_write, "UTF-8"))
- 
 if __name__ == "__main__":
     #todo take arguments for where to bind to.
     httpd = HTTPServer((b"localhost", 8000), Tracker)

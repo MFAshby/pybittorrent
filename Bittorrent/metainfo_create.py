@@ -1,6 +1,6 @@
 from os.path import getsize
 from hashlib import sha1
-from bencode import bencode
+from bencode import bencode_file
 from time import time
 
 def create(output_file="",
@@ -8,7 +8,6 @@ def create(output_file="",
            input_file_length=0,
            input_file_name="",
            piece_length=512000,
-           pieces_encoding="iso-8859-15",
            announce_url="http://localhost:8000", 
            comment="Test torrent file", 
            created_by=""):
@@ -25,14 +24,12 @@ def create(output_file="",
                   {"piece length": piece_length,
                     "name": input_file_name,
                     "length": input_file_length,
-                    "pieces": pieces.decode(encoding=pieces_encoding)},
+                    "pieces": bytes(pieces)},
                 "announce":announce_url,
                 "creation date": int(time()),
                 "comment": comment,
-                "created by": created_by,
-                "encoding": pieces_encoding}
-    to_write_str = bencode(to_write)
-    output_file.write(to_write_str)
+                "created by": created_by}
+    bencode_file(output_file, to_write)
 
 if __name__ == "__main__":
     import argparse

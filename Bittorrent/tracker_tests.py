@@ -3,7 +3,7 @@ from unittest import TestCase
 from unittest.mock import Mock
 
 import tracker
-from bencode import bdecode
+from bencode import bdecode_file
 
 from urllib.parse import urlencode
 
@@ -19,19 +19,23 @@ def TEST_DEFAULTS():
             "event": "started"}
 
 def send_test_params(params):
+    from io import BytesIO
     params_str = urlencode(params, doseq=True)
-    mock_tracker = MockTracker()
+    mock_tracker = Mock()
     mock_tracker.path = "http://localhost:8000/announce?" + params_str
     mock_tracker.client_address = ("127.0.0.1", 8001)
-    tracker.handle_GET(mock_tracker)
-    return bdecode(mock_tracker.output)
-
-class MockTracker(Mock):
-    output = ""
-    def write_str(self, output):
-        self.output = output
+    output_file = BytesIO()
+    tracker.handle_GET(mock_tracker, output_file)
+    output_file.seek(0)
+    return bdecode_file(output_file)
 
 class TestAnnounceUrl(TestCase):
+
+    def assert_dict_entry_type(self, dictionary, name, expected_type, expected_value=None):
+        value = dictionary.get(name)
+        self.assertTrue(type(value) == expected_type)
+        if expected_value != None:
+            self.assertTrue(value == expected_value)
 
     def test_response_keys(self):
         """tests that the response contains some mandatory keys"""
@@ -39,10 +43,10 @@ class TestAnnounceUrl(TestCase):
         tracker.info_hash_to_peers.clear()
         #send a request, check these keys are in it. 
         result = send_test_params(TEST_DEFAULTS())
-        self.assert_dict_entry_type(result, "interval", int)
-        self.assert_dict_entry_type(result, "complete", int)
-        self.assert_dict_entry_type(result, "incomplete", int)
-        self.assert_dict_entry_type(result, "tracker id", str)
+        self.assert_dict_entry_type(result, b"interval", int)
+        self.assert_dict_entry_type(result, b"complete", int)
+        self.assert_dict_entry_type(result, b"incomplete", int)
+        self.assert_dict_entry_type(result, b"tracker id", bytes)
 
     def test_started(self):
         """tests that sending a request gets you added to the list of peers on the tracker"""
@@ -53,7 +57,7 @@ class TestAnnounceUrl(TestCase):
         result = send_test_params(TEST_DEFAULTS())
 
         #check we get no peers back
-        self.assertTrue(result["peers"] == [])
+        self.assertTrue(result[b"peers"] == [])
 
         #check we are added to the list of peers
         self.assertTrue(tracker.info_hash_to_peers.get("TESTINFOHASH").get("TESTPEERID"))
@@ -68,18 +72,18 @@ class TestAnnounceUrl(TestCase):
 
         #send second params with a different peer_id to get the first peer back
         params = TEST_DEFAULTS()
-        params["peer_id"] = "TESTPEERID2"
+        params[b"peer_id"] = "TESTPEERID2"
         result = send_test_params(params)
         
         #check we got the first peer back
-        self.assertTrue(len(result["peers"]) == 1)
-        peer = result["peers"][0]
+        self.assertTrue(len(result[b"peers"]) == 1)
+        peer = result[b"peers"][0]
         self.assertTrue(peer)
     
         #check we got the right info back
-        self.assertTrue(peer["peer id"] == "TESTPEERID")
-        self.assertTrue(peer["ip"] == "127.0.0.1")
-        self.assertTrue(peer["port"] == 8001)
+        self.assertTrue(peer[b"peer id"] == b"TESTPEERID")
+        self.assertTrue(peer[b"ip"] == b"127.0.0.1")
+        self.assertTrue(peer[b"port"] == 8001)
         self.assertTrue(len(peer) == 3)
 
     def test_numpeers(self):
@@ -98,7 +102,7 @@ class TestAnnounceUrl(TestCase):
         result = send_test_params(params)
 
         #check we got 49 peers back
-        peers = result["peers"]
+        peers = result[b"peers"]
         self.assertTrue(len(peers) == 49)
 
         #add another peer
@@ -112,7 +116,7 @@ class TestAnnounceUrl(TestCase):
         result = send_test_params(params)
 
         #check we got 50 peers back
-        peers = result["peers"]
+        peers = result[b"peers"]
         self.assertTrue(len(peers) == 50)
 
         #set numwant to 25, & check we get 25 peers back
@@ -120,7 +124,7 @@ class TestAnnounceUrl(TestCase):
         params["numwant"] = 25
         del params["event"]
         result = send_test_params(params)
-        peers = result["peers"]
+        peers = result[b"peers"]
         self.assertTrue(len(peers) == 25)
 
     def test_num_complete(self):
@@ -133,8 +137,8 @@ class TestAnnounceUrl(TestCase):
         params = TEST_DEFAULTS()
         del params["event"]
         result = send_test_params(params)
-        incomplete = result["incomplete"]
-        complete = result["complete"]
+        incomplete = result[b"incomplete"]
+        complete = result[b"complete"]
         self.assertTrue(incomplete == 1)
         self.assertTrue(complete == 0)
 
@@ -142,8 +146,8 @@ class TestAnnounceUrl(TestCase):
         params = TEST_DEFAULTS()
         params["event"] = "complete"
         result = send_test_params(params)
-        incomplete = result["incomplete"]
-        complete = result["complete"]
+        incomplete = result[b"incomplete"]
+        complete = result[b"complete"]
         self.assertTrue(incomplete == 0)
         self.assertTrue(complete == 1)
 
@@ -151,8 +155,8 @@ class TestAnnounceUrl(TestCase):
         params = TEST_DEFAULTS()
         params["peer_id"] = "TESTPEERID2"
         result = send_test_params(params)
-        incomplete = result["incomplete"]
-        complete = result["complete"]
+        incomplete = result[b"incomplete"]
+        complete = result[b"complete"]
         self.assertTrue(incomplete == 1)
         self.assertTrue(complete == 1)        
 
@@ -161,17 +165,11 @@ class TestAnnounceUrl(TestCase):
         params["peer_id"] = "TESTPEERID2"
         params["event"] = "complete"
         result = send_test_params(params)
-        incomplete = result["incomplete"]
-        complete = result["complete"]
+        incomplete = result[b"incomplete"]
+        complete = result[b"complete"]
         self.assertTrue(incomplete == 0)
         self.assertTrue(complete == 2)        
 
-    def assert_dict_entry_type(self, dictionary, name, expected_type, expected_value=None):
-        """utility method"""
-        value = dictionary.get(name)
-        self.assertTrue(type(value) == expected_type)
-        if expected_value != None:
-            self.assertTrue(value == expected_value)
 
 if __name__ == "__main__":
     unittest.main()
